@@ -1,10 +1,11 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_BMP085.h>
 #include <Adafruit_BMP3XX.h>
 #include <Adafruit_MPU6050.h>
 #include <Preferences.h>
 #include <vector>
+#include <TinyGPS++.h>
+#include <Adafruit_ADS1X15.h>
  
 //Libraries for LoRa
 #include <SPI.h>
@@ -26,15 +27,27 @@ byte destinationAddress = 0x7B;
 #define SDA 27;
 #define SCL 14;
 
+//Variables for the GNSS Module
+#define RXD2 16
+#define TXD2 17
+#define GPS_BAUD 9600
+TinyGPSPlus gps;//Create the GPS Object
+HardwareSerial gpsSerial(2);
+
 
 Adafruit_BMP3XX bmp;
 Adafruit_MPU6050 mpu;
 Preferences preferences;
+Adafruit_ADS1115 ads;
 
 float telemetry_transfer_rate = 2.0; //in Hz
 unsigned long prevTime = millis();
 unsigned long prevTimeMissionStateTime = millis();
 float currentAltitude = 0;
+
+// Calibration multiplier (1 + R1/R2)
+// R1 = 10k, R2 = 3.3k -> 1 + (10/3.3) = 4.03
+const float dividerRatio = 4.03; 
 
 void setup() {
   // put your setup code here, to run once:
@@ -42,6 +55,17 @@ void setup() {
 
   //I2C init
   Wire.begin(SDA,SCL);
+
+  //Initialising ADS for voltage monitoring
+  if (!ads.begin(0x48)) {
+    Serial.println("Failed to initialize ADS.");
+  }
+  // Set PGA (Gain) to 1 (measures +/- 4.096V)
+  ads.setGain(GAIN_ONE);
+
+  //Initialise the GNSS Module
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
+  Serial.println("Serial 2 started at 9600 baud rate");
 
   //LoRa init
   if (!LoRa.begin(866E6)) {            
@@ -204,6 +228,12 @@ void loop() {
               preferences.putInt("mission-state",6);
           }
 
+          //get GNSS data
+          std::vector<float> gnssData = getGNSSData(); 
+
+          //Voltage Monitor Value
+          float actualVoltageValue = getBatteryVoltageLevel();
+
           //Sending Data Part Radio
           
           //Send data through radio
@@ -217,7 +247,25 @@ void loop() {
           str1 += barometerValues[0];
           str1 += String(",");
           str1 += barometerValues[1];
-          str1 += String(",VOLT_V, GNSS_TIME,GNSS_LAT, GNSS_LON, GNSS_ALT_M, GNSS_SATS,");//Need to implement voltage monitoring and gnss time lat long and all
+          str1 += String(",");
+          str1 += actualVoltageValue;//Voltage Monitor Value
+          str1 += String(",");
+          str1 += gnssData[0];
+          str1 += String("-");
+          str1 += gnssData[1];
+          str1 += String("-");
+          str1 += gnssData[2];
+          str1 += String("-");
+          str1 += gnssData[3];
+          str1 += String(",");
+          str1 += gnssData[4];
+          str1 += String(",");
+          str1 += gnssData[5];
+          str1 += String(",");
+          str1 += gnssData[6];
+          str1 += String(",");
+          str1 += gnssData[7];
+          str1 += String(",");
           str1 += accelerometerValues[0];
           str1 += String(",");
           str1 += accelerometerValues[1];
@@ -329,4 +377,35 @@ void sendMessage(String message){
   LoRa.write(outgoing.length());        // add payload length
   LoRa.print(outgoing);                 // add payload
   LoRa.endPacket();                     // finish packet and send it
+}
+
+std::vector<float> getGNSSData(){
+  while (gpsSerial.available() > 0){
+    gps.encode(gpsSerial.read());
+  }
+
+  std::vector<float> valuesToReturn = {};
+  valuesToReturn.push_back(gps.date.day());
+  valuesToReturn.push_back(gps.time.hour());
+  valuesToReturn.push_back(gps.time.minute());
+  valuesToReturn.push_back(gps.time.second());
+  valuesToReturn.push_back(gps.location.lat());
+  valuesToReturn.push_back(gps.location.lng());
+  valuesToReturn.push_back(gps.altitude.meters());
+  valuesToReturn.push_back(gps.satellites.value());
+
+  return valuesToReturn;
+} 
+
+float getBatteryVoltageLevel(){
+  int16_t adc0;
+  float volts0;
+
+  adc0 = ads.readADC_SingleEnded(0);
+  volts0 = ads.computeVolts(adc0);
+
+  // Re-calculate the actual high voltage
+  float actualVoltage = volts0 * dividerRatio;
+
+  return actualVoltage;
 }
