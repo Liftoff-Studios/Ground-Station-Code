@@ -6,6 +6,8 @@
 #include <vector>
 #include <TinyGPS++.h>
 #include <Adafruit_ADS1X15.h>
+#include <SD.h>
+#include <Arducam_Mega.h>
  
 //Libraries for LoRa
 #include <SPI.h>
@@ -45,6 +47,19 @@ unsigned long prevTime = millis();
 unsigned long prevTimeMissionStateTime = millis();
 float currentAltitude = 0;
 
+
+//Camera Initialisation Variables
+// Instantiate Arducam Core Target Object
+ArducamCamera camera(26);
+
+// Edge Recording Configurations
+File videoFile;
+String fileName = "";
+bool recordingActive = false;
+uint8_t bufferBlock; // Local SPI data caching allocation
+unsigned long recordingDuration = 1200000; // Cap video sequence at 1200 Seconds
+unsigned long startTime = 0;
+
 // Calibration multiplier (1 + R1/R2)
 // R1 = 10k, R2 = 3.3k -> 1 + (10/3.3) = 4.03
 const float dividerRatio = 4.03; 
@@ -55,6 +70,10 @@ void setup() {
 
   //I2C init
   Wire.begin(SDA,SCL);
+
+  //SPI Begin
+  SPI.begin(18,19,23);
+
 
   //Initialising ADS for voltage monitoring
   if (!ads.begin(0x48)) {
@@ -68,11 +87,12 @@ void setup() {
   Serial.println("Serial 2 started at 9600 baud rate");
 
   //LoRa init
+  LoRa.setSPI(SPI);
   if (!LoRa.begin(866E6)) {            
     Serial.println("LoRa init failed. Check your connections.");
     while (true);
   }
-
+  LoRa.setPins(5);
   Serial.println("LoRa init succeeded.");
 
   if (!bmp.begin_I2C()) {
@@ -149,7 +169,8 @@ void setup() {
     break;
   }
 
-  
+  //Buzzer Initialisation
+  pinMode(12, OUTPUT); 
 
 
   //Starting flash storage
@@ -167,6 +188,43 @@ void setup() {
   //Update the altitude on startup
   currentAltitude = getPressureValues(preferences.getFloat("ground-level-pressure",101325.0))[2];
   
+
+  //ArduCam + SD Card Initialisation
+  //Set up the SD
+  if (!SD.begin(25)) {
+    Serial.println("initialization failed!");
+  }
+  Serial.println(F("Adafruit MicroSD Card detected successfully."));
+
+  // 3. Initialize Arducam Mega Hardware Array (Pin 5)
+  camera.begin();
+
+  // 4. Generate next Sequential Filename automatically 
+  int fileIndex = 0;
+  while (SD.exists("/video_" + String(fileIndex) + ".mjpeg")) {
+    fileIndex++;
+  }
+  fileName = "/video_" + String(fileIndex) + ".mjpeg";
+  
+  // 5. Build and open the target File Matrix 
+  videoFile = SD.open(fileName, FILE_WRITE);
+  if (!videoFile) {
+    Serial.println(F("CRITICAL ERROR: Failed to instantiate SD stream container."));
+    while (1);
+  }
+  Serial.printf("Target output established: %s\n", fileName.c_str());
+
+  // 6. Initiate Camera Video Buffering Mode (VGA Resolution for speed)
+  CamStatus status = camera.startPreview(CAM_VIDEO_MODE_640X480); 
+  
+  if (status == CAM_ERR_SUCCESS) {
+    Serial.println(F("Recording started... Don't remove power."));
+    recordingActive = true;
+    startTime = millis();
+  } else {
+    Serial.println(F("Failed to initialize asynchronous capture sequence."));
+  }
+
 
   //We can't set it because if reset happens then it should take from previous state
   //preferences.putInt("mission-time",0.0);
@@ -224,6 +282,7 @@ void loop() {
           if((newAltitude-currentAltitude)==0.0 && (newAltitude-currentAltitude)/(currTime-prevTimeMissionStateTime)<0.1){
               preferences.putInt("mission-state",7);
               //Code for lighting up the beacon
+              digitalWrite(12, HIGH)
           }else if((newAltitude-currentAltitude)<0.0 && (currentAltitude-newAltitude)/(currTime-prevTimeMissionStateTime)<5.0){
               preferences.putInt("mission-state",6);
           }
@@ -304,6 +363,29 @@ void loop() {
     default:
         break;
     }
+
+    //Camera Recording
+    if (recordingActive) {
+      uint32_t bytesRead = 0;
+      
+      // Asynchronously pull MJPEG compressed frame chunks over the shared SPI Bus
+      CamStatus readStatus = camera.readStream(&bufferBlock, sizeof(bufferBlock), &bytesRead);
+
+      if (readStatus == CAM_ERR_SUCCESS && bytesRead > 0) {
+        // Stream raw package blocks synchronously into the Adafruit MicroSD storage array
+        videoFile.write(&bufferBlock, bytesRead);
+      }
+
+      // Terminate clip once global execution timeout target is achieved
+      if (millis() - startTime >= recordingDuration) {
+        recordingActive = false;
+        camera.stopPreview();
+        videoFile.flush(); // Flush residual storage tracks
+        videoFile.close(); // Safeguard data structural integrity 
+        Serial.println(F("\n--- Recording Finished! Safe to remove SD card. ---"));
+      }
+    }
+
 
     //Delay for 20ms to give enough time to sensors
     delay(20);
