@@ -5,7 +5,7 @@
 #include <Preferences.h>
 #include <vector>
  
-//Libraries for LoRatesting somethingff
+//Libraries for LoRa
 #include <SPI.h>
 #include <Lora.h>
 #include <string>
