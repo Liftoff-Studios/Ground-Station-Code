@@ -4,7 +4,7 @@
 #include <Adafruit_MPU6050.h>
 #include <Preferences.h>
 #include <vector>
-
+ 
 //Libraries for LoRa
 #include <SPI.h>
 #include <Lora.h>
