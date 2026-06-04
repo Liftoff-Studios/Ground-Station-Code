@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_BMP085.h>
+#include <Adafruit_BMP3XX.h>
 #include <Adafruit_MPU6050.h>
 #include <Preferences.h>
 #include <vector>
@@ -21,8 +22,12 @@ CanSatEsp32 - 0x9B
 byte localAddress = 0x9B;
 byte destinationAddress = 0x7B;
 
+//Other standard variables
+#define SDA 27;
+#define SCL 14;
 
-Adafruit_BMP085 bmp;
+
+Adafruit_BMP3XX bmp;
 Adafruit_MPU6050 mpu;
 Preferences preferences;
 
@@ -36,7 +41,7 @@ void setup() {
   Serial.begin(115200);
 
   //I2C init
-  Wire.begin(27,14);
+  Wire.begin(SDA,SCL);
 
   //LoRa init
   if (!LoRa.begin(866E6)) {            
@@ -46,9 +51,14 @@ void setup() {
 
   Serial.println("LoRa init succeeded.");
 
-  if (!bmp.begin()) {
+  if (!bmp.begin_I2C()) {
     Serial.println("BMP180 couldn't initialise");
   }
+  //Setting some configuration values for the BMP sensor
+  bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
+  bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
+  bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
+  bmp.setOutputDataRate(BMP3_ODR_50_HZ);
 
   if(!mpu.begin()){
     Serial.println("MPU6050 couldn't initialise");
@@ -168,7 +178,7 @@ void loop() {
           std::vector<float> accelerometerValues = getAccelerometerValues();
           std::vector<float> barometerValues = getPressureValues(preferences.getFloat("ground-level-pressure",101325.0));
 
-          int newAltitude = barometerValues[2]; //REPLACE WITH THE ALTIMETER data 
+          int newAltitude = barometerValues[2];
 
           int currentPacketCount = preferences.getInt("packet-count",0);
           int isParachuteDeployed = preferences.getInt("parachute-deployed",0);
@@ -261,17 +271,16 @@ std::vector<float> getAccelerometerValues(){
 
 //Return temperature sensor values in the following format: pressure, temperature, altitude
 std::vector<float> getPressureValues(float groundPressure){
-    float altitude = bmp.readAltitude(groundPressure);
-    float temperature = bmp.readTemperature();
-    int32_t pressure = bmp.readPressure();
+    if (! bmp.performReading()) {
+      Serial.println("BMP Reading Failed");
+      return {0.0,0.0,0.0};
+    }
+    float altitude = bmp.readAltitude(groundPressure/100.0);//Divided by 100 to convert to hPa
+    float temperature = bmp.temperature;
+    int32_t pressure = bmp.pressure;
 
     return {static_cast<float>(pressure), temperature, altitude};
 }
-
-//Notes
-/*
-We still need to decide the resistor values for the SDA and SCL line based on the components we're attaching to them
-*/
 
 
 //Functions for the LoRa Module
