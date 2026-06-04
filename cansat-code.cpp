@@ -8,6 +8,7 @@
 #include <Adafruit_ADS1X15.h>
 #include <SD.h>
 #include <Arducam_Mega.h>
+#include <ESP32Servo.h>
  
 //Libraries for LoRa
 #include <SPI.h>
@@ -30,9 +31,9 @@ byte destinationAddress = 0x7B;
 #define SCL 14;
 
 //Variables for the GNSS Module
-#define RXD2 16
-#define TXD2 17
-#define GPS_BAUD 9600
+#define RXD2 16;
+#define TXD2 17;
+#define GPS_BAUD 9600;
 TinyGPSPlus gps;//Create the GPS Object
 HardwareSerial gpsSerial(2);
 
@@ -47,6 +48,9 @@ unsigned long prevTime = millis();
 unsigned long prevTimeMissionStateTime = millis();
 float currentAltitude = 0;
 
+//Servo Initialisation
+Servo parachuteServo; 
+#define PARACHUTE_SERVO_ROTATION_ANGLE 67;
 
 //Camera Initialisation Variables
 // Instantiate Arducam Core Target Object
@@ -74,6 +78,9 @@ void setup() {
   //SPI Begin
   SPI.begin(18,19,23);
 
+  //Parachute Servo Initialisation
+  servo.attach(33);  // attaches the servo on pin 9 to the servo objectư
+  servo.write(0); 
 
   //Initialising ADS for voltage monitoring
   if (!ads.begin(0x48)) {
@@ -267,6 +274,7 @@ void loop() {
           //Condition for parachute deployment
           if(newAltitude<70.0 && (newAltitude-currentAltitude)<0.0 && isParachuteDeployed==0){
               //Trigger Deployment sequence
+              servo.write(PARACHUTE_SERVO_ROTATION_ANGLE);
               preferences.putInt("mission-state",5);
               preferences.putInt("parachute-deployed",1);
           }
